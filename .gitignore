@@ -5,6 +5,7 @@ venv/
 
 # Data
 data/raw/
+data/processed/
 
 
 # Models
