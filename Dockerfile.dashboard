@@ -1,0 +1,73 @@
+# Dockerfile.dashboard
+# ═════════════════════
+# Builds the Streamlit dashboard container.
+# Very similar to Dockerfile.api but runs Streamlit
+# instead of Uvicorn.
+
+FROM python:3.11-slim
+
+LABEL description="Customer Churn Dashboard"
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Streamlit specific environment variables
+# These configure Streamlit behavior inside Docker.
+#
+# STREAMLIT_SERVER_HEADLESS=true
+#   → Run without opening a browser window.
+#   → Required for server/container environments.
+#
+# STREAMLIT_SERVER_PORT=8501
+#   → Default Streamlit port.
+#
+# STREAMLIT_SERVER_ADDRESS=0.0.0.0
+#   → Listen on all interfaces (same reason as API).
+#
+# STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+#   → Disable telemetry data collection.
+ENV STREAMLIT_SERVER_HEADLESS=true
+ENV STREAMLIT_SERVER_PORT=8501
+ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
+ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install dependencies first (cache optimization)
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+# Copy dashboard code and data
+COPY dashboard/ ./dashboard/
+COPY data/processed/ ./data/processed/
+COPY models/ ./models/
+
+# Non-root user for security
+RUN adduser --disabled-password --gecos '' appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8501
+
+# Health check for Streamlit
+# Streamlit has a built-in health endpoint at /_stcore/health
+HEALTHCHECK --interval=30s \
+            --timeout=10s \
+            --start-period=60s \
+            --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+# Start Streamlit
+# dashboard/app.py = our main entry point
+CMD ["streamlit", "run", "dashboard/app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true"]

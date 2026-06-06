@@ -1,0 +1,131 @@
+# docker-compose.yml
+# ═══════════════════
+# Docker Compose orchestrates MULTIPLE containers together.
+# Instead of running each container manually with long
+# "docker run" commands, you define everything here
+# and start everything with ONE command:
+#   docker compose up
+#
+# HOW IT WORKS:
+# Docker Compose creates a private network for all services.
+# Services can reach each other by service name.
+# Example: the dashboard reaches the API at http://api:8000
+# (not localhost:8000 — because they are separate containers)
+
+version: '3.8'
+
+# ── Services ──────────────────────────────────────────────
+# Each "service" is one container.
+# We have two services: api and dashboard.
+services:
+
+  # ── Service 1: FastAPI ───────────────────────────────────
+  api:
+    # build: tells Compose to BUILD the image
+    # from the Dockerfile instead of pulling from hub.
+    # context: . = build from the current directory
+    # dockerfile: = which Dockerfile to use
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+
+    # Container name — easier to identify in docker ps
+    container_name: churn_api
+
+    # ports: maps host port → container port
+    # "8000:8000" means:
+    #   your machine port 8000 → container port 8000
+    # You access the API at http://localhost:8000
+    ports:
+      - "8000:8000"
+
+    # environment: set environment variables inside container
+    # We read from .env file (see File 4)
+    # ${VARIABLE} syntax reads from .env file
+    environment:
+      - API_KEY=${API_KEY}
+      - MODELS_PATH=/app/models
+      - ENVIRONMENT=production
+
+    # volumes: mount files from host into container
+    # This lets you update model files WITHOUT rebuilding
+    # the Docker image.
+    # Format: host_path:container_path
+    volumes:
+      - ./models:/app/models
+      - ./data/processed:/app/data/processed
+
+    # restart: what to do if container crashes
+    # "unless-stopped" = always restart except when
+    # you manually stop it with docker compose down
+    restart: unless-stopped
+
+    # healthcheck: override the Dockerfile HEALTHCHECK
+    # (same logic, just defined here for clarity)
+    healthcheck:
+      test: ["CMD", "curl", "-f",
+             "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # networks: connect to the shared network
+    networks:
+      - churn_network
+
+
+  # ── Service 2: Streamlit Dashboard ───────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+
+    container_name: churn_dashboard
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      # IMPORTANT: inside Docker, the dashboard container
+      # reaches the API at http://api:8000 NOT localhost:8000
+      # "api" is the service name defined above.
+      # Docker's internal DNS resolves service names.
+      - API_URL=http://api:8000
+      - API_KEY=${API_KEY}
+
+    volumes:
+      - ./data/processed:/app/data/processed
+
+    # depends_on: start api container BEFORE dashboard.
+    # The dashboard needs the API to be running.
+    # Note: depends_on only waits for the container to START,
+    # not for the API to be fully ready.
+    # That is why we have retry logic in the dashboard code.
+    depends_on:
+      api:
+        condition: service_healthy  # Wait for health check to pass
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f",
+             "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    networks:
+      - churn_network
+
+
+# ── Networks ──────────────────────────────────────────────
+# We create a custom bridge network.
+# This isolates our containers from other Docker containers
+# running on the same machine.
+# Both services join this network and can communicate.
+networks:
+  churn_network:
+    driver: bridge
+    name: churn_network

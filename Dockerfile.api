@@ -1,0 +1,126 @@
+# Dockerfile.api
+# ══════════════
+# This file tells Docker HOW to build the API container.
+#
+# Think of a Dockerfile as a recipe:
+# Each line is one instruction that Docker executes
+# in order to build a self-contained "box" (container)
+# that has everything needed to run the FastAPI server.
+#
+# WHY DOCKER?
+# Without Docker: "works on my machine" problem.
+# With Docker: runs identically on any machine,
+# any server, any cloud provider.
+
+# ── Base image ────────────────────────────────────────────
+# FROM = start from an existing image.
+# python:3.11-slim = official Python 3.11 image.
+# "slim" = minimal version, smaller file size (~50MB vs 900MB).
+# Always use a specific version tag, never just "python:latest"
+# because "latest" changes and breaks your build.
+FROM python:3.11-slim
+
+# ── Metadata ──────────────────────────────────────────────
+# LABEL = attach information to the image.
+# Not required but good practice.
+LABEL maintainer="your-name"
+LABEL description="Customer Churn Prediction API"
+LABEL version="1.0.0"
+
+# ── Environment variables ─────────────────────────────────
+# ENV = set environment variables inside the container.
+#
+# PYTHONDONTWRITEBYTECODE=1
+#   → Prevents Python from writing .pyc bytecode files.
+#   → Keeps the container clean.
+#
+# PYTHONUNBUFFERED=1
+#   → Forces Python to print output immediately.
+#   → Without this, logs appear delayed or not at all.
+#   → Critical for seeing API logs in real time.
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# ── Working directory ─────────────────────────────────────
+# WORKDIR = set the working directory inside the container.
+# All subsequent commands run from this directory.
+# It is created automatically if it does not exist.
+WORKDIR /app
+
+# ── Install system dependencies ───────────────────────────
+# RUN = execute a shell command during build.
+# We install libgomp1 which is required by XGBoost
+# for parallel processing on Linux.
+#
+# --no-install-recommends = don't install optional packages
+# → keeps the image smaller
+#
+# rm -rf /var/lib/apt/lists/* = clean up apt cache
+# → reduces image size
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Copy and install Python dependencies ──────────────────
+# We copy requirements.txt FIRST, before copying the code.
+# WHY? Docker caches each layer.
+# If you copy code first, every code change rebuilds
+# the pip install layer (slow — 2-3 minutes).
+# If you copy requirements first, pip install is only
+# re-run when requirements.txt changes.
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+# ── Copy application code ─────────────────────────────────
+# COPY <source on your machine> <destination in container>
+# We copy the api folder and models folder
+COPY api/ ./api/
+COPY models/ ./models/
+COPY data/processed/ ./data/processed/
+
+# ── Create non-root user ──────────────────────────────────
+# Running as root inside a container is a security risk.
+# We create a dedicated user "appuser" for the application.
+# This is a production best practice.
+RUN adduser --disabled-password --gecos '' appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+# ── Expose port ───────────────────────────────────────────
+# EXPOSE = document which port the container listens on.
+# This does NOT actually publish the port —
+# that is done in docker-compose.yml with "ports:".
+# Think of EXPOSE as documentation.
+EXPOSE 8000
+
+# ── Health check ──────────────────────────────────────────
+# HEALTHCHECK = tells Docker how to verify the container
+# is working correctly.
+# Docker checks /health every 30 seconds.
+# If it fails 3 times → container is marked "unhealthy".
+HEALTHCHECK --interval=30s \
+            --timeout=10s \
+            --start-period=40s \
+            --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# ── Start command ─────────────────────────────────────────
+# CMD = the command that runs when the container starts.
+# We use uvicorn to serve the FastAPI application.
+#
+# --host 0.0.0.0 = listen on ALL network interfaces.
+#   Without this, the API is only accessible inside
+#   the container (127.0.0.1) — not from outside.
+#   This is a very common beginner mistake.
+#
+# --port 8000 = port to listen on inside the container.
+# --workers 2 = run 2 parallel workers for better performance.
+# NO --reload = reload is only for development, not production.
+CMD ["uvicorn", "api.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "2"]

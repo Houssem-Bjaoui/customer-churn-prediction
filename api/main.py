@@ -19,7 +19,6 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import (
     FastAPI, Depends, HTTPException,
